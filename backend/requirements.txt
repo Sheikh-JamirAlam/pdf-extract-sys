@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+httpx
+PyMuPDF
+pytesseract
+pdf2image
+opencv-python-headless
+numpy
