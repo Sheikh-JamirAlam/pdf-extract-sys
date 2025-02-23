@@ -57,6 +57,10 @@ async def extract_pdf(pdf_req: PDFRequest):
     for page_num in range(doc.page_count):
         page = doc.load_page(page_num)
         if is_searchable(page):
+            # Get page dimensions
+            page_width = page.rect.width
+            page_height = page.rect.height
+            
             blocks = page.get_text("dict")["blocks"]
             for block in blocks:
                 if block["type"] == 0:  # Text block
@@ -65,15 +69,17 @@ async def extract_pdf(pdf_req: PDFRequest):
                         if line_text:
                             first_span = line["spans"][0]
                             last_span = line["spans"][-1]
+                            # Convert coordinates to percentages
                             bbox = [
-                                first_span["bbox"][0],
-                                first_span["bbox"][1],
-                                last_span["bbox"][2],
-                                last_span["bbox"][3]
+                                (first_span["bbox"][0] / page_width) * 100,  # left
+                                (first_span["bbox"][1] / page_height) * 100, # top
+                                (last_span["bbox"][2] / page_width) * 100,   # right
+                                (last_span["bbox"][3] / page_height) * 100   # bottom
                             ]
                             results.append({
                                 "text": line_text,
-                                "bbox": bbox
+                                "bbox": bbox,
+                                "pageNumber": page_num
                             })
         else:
             pix = page.get_pixmap()
@@ -87,7 +93,8 @@ async def extract_pdf(pdf_req: PDFRequest):
                 if line.strip():
                     results.append({
                         "text": line.strip(),
-                        "bbox": [0, 0, 0, 0]
+                        "bbox": [0, 0, 0, 0],
+                        "pageNumber": page_num
                     })
 
     return {"results": results}

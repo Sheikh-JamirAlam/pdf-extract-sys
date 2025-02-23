@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import axios from "axios";
 import dynamic from "next/dynamic";
 
@@ -11,14 +11,20 @@ const PDFViewer = dynamic(() => import("./components/PDFViewer"), {
 interface ExtractedItem {
   text: string;
   bbox: [number, number, number, number];
+  pageNumber?: number; // Ensure page number is included
 }
 
 export default function Home() {
   const [pdfUrl, setPdfUrl] = useState("");
   const [transcript, setTranscript] = useState<ExtractedItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+  const [selectedText, setSelectedText] = useState<ExtractedItem | null>(null);
 
-  // Function to call the backend extraction API
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   const handleExtract = async () => {
     try {
       setIsLoading(true);
@@ -32,9 +38,16 @@ export default function Home() {
     }
   };
 
+  const handleTranscriptClick = (item: ExtractedItem) => {
+    setSelectedText(item);
+  };
+
+  if (!isMounted) {
+    return null;
+  }
+
   return (
     <div className="flex">
-      {/* Sidebar for URL input and transcript */}
       <div className="w-1/2 p-4">
         <h2 className="text-xl font-bold mb-4">PDF URL Input</h2>
         <input type="text" className="border p-2 w-full" value={pdfUrl} onChange={(e) => setPdfUrl(e.target.value)} placeholder="Enter PDF URL" />
@@ -44,14 +57,13 @@ export default function Home() {
         <h2 className="text-xl font-bold mt-6">Transcript</h2>
         <div className="mt-2 p-4 border rounded max-h-[600px] overflow-y-auto">
           {transcript.map((item, index) => (
-            <div key={index} className="whitespace-pre-line">
+            <div key={index} className="whitespace-pre-line" onClick={() => handleTranscriptClick(item)}>
               {item.text}
             </div>
           ))}
         </div>
       </div>
-      {/* Main area for PDF viewing */}
-      <PDFViewer url={pdfUrl} />
+      <PDFViewer url={pdfUrl} selectedText={selectedText} />
     </div>
   );
 }
