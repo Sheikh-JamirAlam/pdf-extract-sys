@@ -1,8 +1,4 @@
-fastapi
-uvicorn
-httpx
-PyMuPDF
-pytesseract
-pdf2image
-opencv-python-headless
-numpy
+fastapi==0.109.0
+uvicorn==0.27.0
+httpx==0.26.0
+pypdfium2==4.25.0

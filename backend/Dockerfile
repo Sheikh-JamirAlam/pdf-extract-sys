@@ -1,25 +1,18 @@
-# Dockerfile
+# Use a minimal Python image
 FROM python:3.9-slim
 
-# Install system dependencies (Tesseract OCR, poppler-utils, etc.)
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    poppler-utils \
-    libgl1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set the working directory
+# Set the working directory inside the container
 WORKDIR /app
 
-# Copy and install Python dependencies
+# Copy the requirements file and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
 COPY . .
 
-# Expose port 8000 for the application
+# Expose FastAPI port
 EXPOSE 8000
 
-# Run the application with Uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application using Uvicorn with a single worker to limit resource usage
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
