@@ -11,7 +11,7 @@ const PDFViewer = dynamic(() => import("./components/PDFViewer"), {
 interface ExtractedItem {
   text: string;
   bbox: [number, number, number, number];
-  pageNumber?: number; // Ensure page number is included
+  pageNumber?: number;
 }
 
 export default function Home() {

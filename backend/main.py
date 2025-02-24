@@ -52,36 +52,77 @@ async def extract_pdf(pdf_req: PDFRequest):
         raise HTTPException(status_code=400, detail="PDF has too many pages")
 
     results = []
-    current_line = []
     
     for page_num in range(doc.page_count):
         page = doc.load_page(page_num)
         if is_searchable(page):
-            # Get page dimensions
-            page_width = page.rect.width
-            page_height = page.rect.height
-            
             blocks = page.get_text("dict")["blocks"]
             for block in blocks:
                 if block["type"] == 0:  # Text block
                     for line in block["lines"]:
-                        line_text = " ".join(span["text"] for span in line["spans"]).strip()
-                        if line_text:
-                            first_span = line["spans"][0]
-                            last_span = line["spans"][-1]
-                            # Convert coordinates to percentages
+                        spans = line["spans"]
+                        current_sentence = ""
+                        current_words = []
+                        current_span = None
+                        
+                        for span in spans:
+                            words = span["text"].split()
+                            span_width = span["bbox"][2] - span["bbox"][0]
+                            char_width = span_width / len(span["text"]) if span["text"] else 0
+                            
+                            word_start = span["bbox"][0]
+                            for word in words:
+                                word_width = len(word) * char_width
+                                word_bbox = [
+                                    word_start,
+                                    span["bbox"][1],
+                                    word_start + word_width,
+                                    span["bbox"][3]
+                                ]
+                                current_words.append((word, word_bbox, span))
+                                word_start += (len(word) + 1) * char_width  # +1 for space
+                                current_sentence += word + " "
+                                
+                                if any(word.endswith(end) for end in ['.', '!', '?']):
+                                    if current_sentence.strip():
+                                        # Calculate bbox from first to last word of sentence
+                                        first_word = current_words[0]
+                                        last_word = current_words[-1]
+                                        bbox = [
+                                            (first_word[1][0] / page.rect.width) * 100,
+                                            (first_word[1][1] / page.rect.height) * 100,
+                                            (last_word[1][2] / page.rect.width) * 100,
+                                            (last_word[1][3] / page.rect.height) * 100
+                                        ]
+                                        
+                                        results.append({
+                                            "text": current_sentence.strip(),
+                                            "bbox": bbox,
+                                            "pageNumber": page_num
+                                        })
+                                        
+                                        # Start next sentence with remaining words
+                                        current_sentence = ""
+                                        current_words = []
+                        
+                        # Handle remaining text in the line
+                        if current_sentence.strip():
+                            first_word = current_words[0]
+                            last_word = current_words[-1]
                             bbox = [
-                                (first_span["bbox"][0] / page_width) * 100,  # left
-                                (first_span["bbox"][1] / page_height) * 100, # top
-                                (last_span["bbox"][2] / page_width) * 100,   # right
-                                (last_span["bbox"][3] / page_height) * 100   # bottom
+                                (first_word[1][0] / page.rect.width) * 100,
+                                (first_word[1][1] / page.rect.height) * 100,
+                                (last_word[1][2] / page.rect.width) * 100,
+                                (last_word[1][3] / page.rect.height) * 100
                             ]
+                            
                             results.append({
-                                "text": line_text,
+                                "text": current_sentence.strip(),
                                 "bbox": bbox,
                                 "pageNumber": page_num
                             })
         else:
+            # OCR part
             pix = page.get_pixmap()
             img_data = pix.tobytes("png")
             ocr_text = pytesseract.image_to_string(
@@ -89,6 +130,7 @@ async def extract_pdf(pdf_req: PDFRequest):
                 config='--psm 6'
             )
             lines = ocr_text.splitlines()
+            
             for line in lines:
                 if line.strip():
                     results.append({
