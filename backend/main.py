@@ -65,7 +65,7 @@ async def extract_pdf(pdf_req: PDFRequest):
             current_sentence += char
 
             # If a sentence ender or line break is found, finalize sentence
-            if char in sentence_enders or char == "\n":
+            if char in sentence_enders or char == "\n" or char == "\ufffe":
                 if current_sentence.strip():
                     
                     while sentence_chars and sentence_chars[0][0] in {"\r", "\n"}:
