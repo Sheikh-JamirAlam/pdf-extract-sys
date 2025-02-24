@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import httpx
 import io
 import pypdfium2 as pdfium
+import statistics
 
 app = FastAPI()
 
@@ -39,9 +40,7 @@ async def extract_pdf(pdf_req: PDFRequest):
         page_width, page_height = page.get_size()
 
         current_sentence = ""
-        sentence_chars = []  # Store characters and their bounding boxes
-
-        # Extract the full text
+        sentence_chars = []
         full_text = textpage.get_text_range()
 
         # Iterate through individual characters and their bounding boxes
@@ -53,13 +52,13 @@ async def extract_pdf(pdf_req: PDFRequest):
 
             if not bbox:
                 continue  # Skip if there's no bounding box (e.g., spaces)
-
+                
             # Normalize bounding box
             bbox_normalized = [
-                (bbox[0] / page_width) * 100,      # x0
-                (1 - bbox[3] / page_height) * 100, # y0 (flipped)
-                (bbox[2] / page_width) * 100,      # x1
-                (1 - bbox[1] / page_height) * 100  # y1 (flipped)
+                (bbox[0] / page_width) * 100,
+                ((page_height - bbox[3]) / page_height) * 100,
+                (bbox[2] / page_width) * 100,
+                ((page_height - bbox[1]) / page_height) * 100
             ]
 
             sentence_chars.append((char, bbox_normalized))
@@ -68,12 +67,17 @@ async def extract_pdf(pdf_req: PDFRequest):
             # If a sentence ender or line break is found, finalize sentence
             if char in sentence_enders or char == "\n":
                 if current_sentence.strip():
-                    # Compute bounding box from first to last character
+                    
+                    while sentence_chars and sentence_chars[0][0] in {"\r", "\n"}:
+                        sentence_chars.pop(0)
+                    while sentence_chars and sentence_chars[-1][0] in {"\r", "\n"}:
+                        sentence_chars.pop()
+                    
                     sentence_bbox = [
                         min(b[0] for _, b in sentence_chars),  # x0
-                        min(b[1] for _, b in sentence_chars),  # y0
+                        min(b[1] for _, b in sentence_chars),             # y0 (use median instead of min)
                         max(b[2] for _, b in sentence_chars),  # x1
-                        max(b[3] for _, b in sentence_chars)   # y1
+                        max(b[3] for _, b in sentence_chars)              # y1 (use median instead of max)
                     ]
 
                     results.append({
@@ -88,6 +92,11 @@ async def extract_pdf(pdf_req: PDFRequest):
 
         # Handle remaining text if no punctuation ended it
         if current_sentence.strip():
+            while sentence_chars and sentence_chars[0][0] in {"\r", "\n"}:
+                sentence_chars.pop(0)
+            while sentence_chars and sentence_chars[-1][0] in {"\r", "\n"}:
+                sentence_chars.pop()
+                        
             sentence_bbox = [
                 min(b[0] for _, b in sentence_chars),  # x0
                 min(b[1] for _, b in sentence_chars),  # y0
