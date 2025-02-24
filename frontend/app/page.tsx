@@ -4,9 +4,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import dynamic from "next/dynamic";
 
-const PDFViewer = dynamic(() => import("./components/PDFViewer"), {
-  ssr: false,
-});
+const PDFViewer = dynamic(() => import("./components/PDFViewer"), { ssr: false });
 
 interface ExtractedItem {
   text: string;
@@ -55,9 +53,9 @@ export default function Home() {
           {isLoading ? "Extracting..." : "Extract PDF"}
         </button>
         <h2 className="text-xl font-bold mt-6">Transcript</h2>
-        <div className="mt-2 p-4 border rounded max-h-[600px] overflow-y-auto">
+        <div className="mt-2 p-4 border rounded max-h-[600px] overflow-y-auto whitespace-pre-line">
           {transcript.map((item, index) => (
-            <div key={index} className="whitespace-pre-line" onClick={() => handleTranscriptClick(item)}>
+            <div key={index} className="cursor-pointer p-2 hover:bg-gray-200" onClick={() => handleTranscriptClick(item)}>
               {item.text}
             </div>
           ))}
