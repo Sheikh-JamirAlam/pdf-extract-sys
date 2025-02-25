@@ -4,7 +4,6 @@ from pydantic import BaseModel
 import httpx
 import io
 import pypdfium2 as pdfium
-import re
 
 app = FastAPI()
 
@@ -31,12 +30,6 @@ async def extract_pdf(pdf_req: PDFRequest):
     results = []
     sentence_enders = {".", "!", "?"}  # Sentence-ending punctuation
     email_domains = {"com", "org", "edu"}  # Email top level domains
-    
-    # Define patterns for various content types
-    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
-    equation_pattern = re.compile(r'[OΟ]\([^)]+\)|(\([^)]+\))')
-    decimal_pattern = re.compile(r'\b\d+\.\d+\b')
-    toc_pattern = re.compile(r'\b\d+\.\d+.*?\.{2,}.*?\d+\b')
 
     # Open the PDF using PDFium
     pdf = pdfium.PdfDocument(pdf_data)
@@ -77,6 +70,8 @@ async def extract_pdf(pdf_req: PDFRequest):
             # Check for mathematical sequences
             if char == "." and ((index + 1 < len(full_text) and full_text[index + 1] == ".") or (index > 0 and full_text[index - 1] == ".")):
                 continue
+            if char == "." and ((index + 3 < len(full_text) and full_text[index + 1 : index + 3] == " .") or (index > 1 and full_text[index - 2 : index] == ". ")):
+                continue
             # Check for emails
             if char == "." and (full_text[index + 1 : index + 4] in email_domains):
                 continue
@@ -88,9 +83,9 @@ async def extract_pdf(pdf_req: PDFRequest):
             if char in sentence_enders or char == "\n" or char == "\ufffe":
                 if current_sentence.strip():
                     
-                    while sentence_chars and sentence_chars[0][0] in {"\r", "\n"}:
+                    while sentence_chars and sentence_chars[0][0] in {"\r", "\n", " "}:
                         sentence_chars.pop(0)
-                    while sentence_chars and sentence_chars[-1][0] in {"\r", "\n"}:
+                    while sentence_chars and sentence_chars[-1][0] in {"\r", "\n", " "}:
                         sentence_chars.pop()
                     
                     sentence_bbox = [
