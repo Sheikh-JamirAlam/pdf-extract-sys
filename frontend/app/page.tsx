@@ -20,9 +20,6 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState(false);
   const [selectedText, setSelectedText] = useState<ExtractedItem | null>(null);
 
-  // const [currentPage, setCurrentPage] = useState(0);
-  // const itemsPerLoad = 200; // Load 200 items at a time
-
   useEffect(() => {
     setIsMounted(true);
   }, []);
@@ -39,13 +36,6 @@ export default function Home() {
       setIsLoading(false);
     }
   };
-
-  // const loadMorePages = () => {
-  //   const nextPage = currentPage + 1;
-  //   const newItems = transcript.slice(nextPage * itemsPerLoad, (nextPage + 1) * itemsPerLoad);
-  //   setTranscript((prev) => [...prev, ...newItems]); // Append more data
-  //   setCurrentPage(nextPage);
-  // };
 
   const handleTranscriptClick = (item: ExtractedItem) => {
     setSelectedText(item);
@@ -64,24 +54,6 @@ export default function Home() {
           {isLoading ? "Extracting..." : "Extract PDF"}
         </button>
         <h2 className="text-xl font-bold mt-6">Transcript</h2>
-        {/* <div
-          className="mt-2 p-4 border rounded max-h-[600px] overflow-y-auto whitespace-pre-line"
-          onScroll={(e) => {
-            const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-            if (scrollTop + clientHeight >= scrollHeight - 20) loadMorePages(); // Auto-load on scroll
-          }}
-        >
-          {visiblePages.map((item, index) => (
-            <div key={index} className="cursor-pointer p-2 hover:bg-gray-200" onClick={() => handleTranscriptClick(item)}>
-              {item.text}
-            </div>
-          ))}
-          {transcript.map((item, index) => (
-            <div key={index} className="cursor-pointer p-2 hover:bg-gray-200" onClick={() => handleTranscriptClick(item)}>
-              {item.text}
-            </div>
-          ))}
-        </div> */}
         <div className="mt-2 p-4 border rounded overflow-y-auto whitespace-pre-line">
           <List
             height={600} // Visible height
