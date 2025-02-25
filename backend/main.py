@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import httpx
 import io
 import pypdfium2 as pdfium
-import statistics
+import re
 
 app = FastAPI()
 
@@ -30,6 +30,13 @@ async def extract_pdf(pdf_req: PDFRequest):
     pdf_data = io.BytesIO(response.content)  # Convert bytes to a file-like object
     results = []
     sentence_enders = {".", "!", "?"}  # Sentence-ending punctuation
+    email_domains = {"com", "org", "edu"}  # Email top level domains
+    
+    # Define patterns for various content types
+    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
+    equation_pattern = re.compile(r'[OΟ]\([^)]+\)|(\([^)]+\))')
+    decimal_pattern = re.compile(r'\b\d+\.\d+\b')
+    toc_pattern = re.compile(r'\b\d+\.\d+.*?\.{2,}.*?\d+\b')
 
     # Open the PDF using PDFium
     pdf = pdfium.PdfDocument(pdf_data)
@@ -63,7 +70,17 @@ async def extract_pdf(pdf_req: PDFRequest):
 
             sentence_chars.append((char, bbox_normalized))
             current_sentence += char
-
+            
+            # Check for decimals
+            if char == "." and len(current_sentence) >= 2 and current_sentence[-2].isdigit() and full_text[index + 1].isdigit():
+                continue
+            # Check for mathematical sequences
+            if char == "." and (full_text[index + 1] == "." or full_text[index - 1] == "."):
+                continue
+            # Check for emails
+            if char == "." and (full_text[index + 1 : index + 4] in email_domains):
+                continue
+                    
             # If a sentence ender or line break is found, finalize sentence
             if char in sentence_enders or char == "\n" or char == "\ufffe":
                 if current_sentence.strip():
@@ -75,9 +92,9 @@ async def extract_pdf(pdf_req: PDFRequest):
                     
                     sentence_bbox = [
                         min(b[0] for _, b in sentence_chars),  # x0
-                        min(b[1] for _, b in sentence_chars),             # y0 (use median instead of min)
+                        min(b[1] for _, b in sentence_chars),  # y0
                         max(b[2] for _, b in sentence_chars),  # x1
-                        max(b[3] for _, b in sentence_chars)              # y1 (use median instead of max)
+                        max(b[3] for _, b in sentence_chars)   # y1
                     ]
 
                     results.append({
