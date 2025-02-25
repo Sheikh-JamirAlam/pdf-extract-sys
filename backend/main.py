@@ -75,12 +75,15 @@ async def extract_pdf(pdf_req: PDFRequest):
             if char == "." and len(current_sentence) >= 2 and current_sentence[-2].isdigit() and full_text[index + 1].isdigit():
                 continue
             # Check for mathematical sequences
-            if char == "." and (full_text[index + 1] == "." or full_text[index - 1] == "."):
+            if char == "." and ((index + 1 < len(full_text) and full_text[index + 1] == ".") or (index > 0 and full_text[index - 1] == ".")):
                 continue
             # Check for emails
             if char == "." and (full_text[index + 1 : index + 4] in email_domains):
                 continue
-                    
+            # Check for URLs
+            if char == "." and index > 3 and current_sentence[-4:].lower() == "www.":
+                continue
+            
             # If a sentence ender or line break is found, finalize sentence
             if char in sentence_enders or char == "\n" or char == "\ufffe":
                 if current_sentence.strip():
