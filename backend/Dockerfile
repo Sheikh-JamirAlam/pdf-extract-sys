@@ -5,6 +5,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     libtesseract-dev \
+    build-essential \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 

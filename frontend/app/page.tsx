@@ -28,7 +28,7 @@ export default function Home() {
     try {
       setIsLoading(true);
       const response = await axios.post("http://localhost:8000/extract", { pdf_url: pdfUrl });
-      setTranscript(response.data.results); // Load first batch
+      setTranscript(response.data.results);
     } catch (error) {
       console.error("Extraction error:", error);
       alert("Failed to extract PDF");
@@ -55,17 +55,11 @@ export default function Home() {
         </button>
         <h2 className="text-xl font-bold mt-6">Transcript</h2>
         <div className="mt-2 p-4 border rounded overflow-y-auto whitespace-pre-line">
-          <List
-            height={600} // Visible height
-            itemCount={transcript.length}
-            itemSize={50} // Each row height
-            width={"100%"}
-            itemData={transcript}
-          >
+          <List height={600} itemCount={transcript.length} itemSize={30} width={"100%"} itemData={transcript}>
             {({ index, style, data }) => {
               const item = data[index];
               return (
-                <div key={index} style={style} className="cursor-pointer p-2 hover:bg-gray-200" onClick={() => handleTranscriptClick(item)}>
+                <div key={index} style={style} className="flex items-center cursor-pointer p-2 hover:bg-gray-200" onClick={() => handleTranscriptClick(item)}>
                   {item.text}
                 </div>
               );
