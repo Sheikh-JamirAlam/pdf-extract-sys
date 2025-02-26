@@ -1,7 +1,11 @@
-fastapi==0.109.0
-uvicorn==0.27.0
-httpx==0.26.0
-pypdfium2==4.25.0
+fastapi==0.110.0
+uvicorn==0.27.1
+httpx==0.27.0
+pydantic==2.6.1
+pypdfium2==4.26.0
 pytesseract==0.3.10
-Pillow==10.1.0
-python-multipart==0.0.6
+Pillow==10.2.0
+python-multipart==0.0.9
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+aiofiles==23.2.1

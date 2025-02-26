@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import dynamic from "next/dynamic";
-import { FixedSizeList as List } from "react-window";
+import { VariableSizeList as List } from "react-window";
 
 const PDFViewer = dynamic(() => import("./components/PDFViewer"), { ssr: false });
 
@@ -41,6 +41,18 @@ export default function Home() {
     setSelectedText(item);
   };
 
+  // Simple heuristic to compute the height of a row based on its text length.
+  const getItemSize = useCallback(
+    (index: number) => {
+      const text = transcript[index]?.text || "";
+      // Assume roughly 50 characters per line and 20px per line.
+      const lines = Math.ceil(text.length / 50);
+      // Minimum height of 30px, add 20px per additional line.
+      return Math.max(30, lines * 20);
+    },
+    [transcript]
+  );
+
   if (!isMounted) {
     return null;
   }
@@ -55,7 +67,7 @@ export default function Home() {
         </button>
         <h2 className="text-xl font-bold mt-6">Transcript</h2>
         <div className="mt-2 p-4 border rounded overflow-y-auto whitespace-pre-line">
-          <List height={600} itemCount={transcript.length} itemSize={30} width={"100%"} itemData={transcript}>
+          <List height={600} itemCount={transcript.length} itemSize={getItemSize} width={"100%"} itemData={transcript}>
             {({ index, style, data }) => {
               const item = data[index];
               return (
