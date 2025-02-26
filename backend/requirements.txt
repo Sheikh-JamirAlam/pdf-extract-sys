@@ -4,5 +4,4 @@ httpx==0.26.0
 pypdfium2==4.25.0
 pytesseract==0.3.10
 Pillow==10.1.0
-numpy==1.26.0
 python-multipart==0.0.6

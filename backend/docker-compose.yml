@@ -1,0 +1,19 @@
+version: "3"
+services:
+  pdf-service:
+    build: .
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    environment:
+      - WORKERS=2
+      - TESSERACT_NUM_THREADS=2
+      - MAX_WORKERS=2
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./:/app
+    stop_grace_period: 30s
