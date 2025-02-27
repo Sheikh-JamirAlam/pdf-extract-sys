@@ -235,7 +235,7 @@ async def process_with_optimized_ocr(pdf, pdf_data):
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # For very large documents, sample strategically
-        if page_count > 150:
+        if page_count > 35:
             return await process_with_smart_sampling(pdf, pdf_data, page_count, temp_dir)
 
         # Otherwise process all pages with optimized OCR
@@ -269,10 +269,12 @@ async def process_with_optimized_ocr(pdf, pdf_data):
                 ocr_tasks.append(ocr_task)
             
             # Process results
-            for future in asyncio.as_completed(ocr_tasks, timeout=60):
+            for future in asyncio.as_completed(ocr_tasks, timeout=75):
                 try:
                     page_results = await future
                     results.extend(page_results)
+                except asyncio.TimeoutError:
+                    print(f"Timeout processing page {page_num}")
                 except Exception as e:
                     print(f"Error in OCR processing: {e}")
     
@@ -600,6 +602,10 @@ async def process_with_smart_sampling(pdf, pdf_data, page_count, temp_dir):
     
     # Process OCR for sample pages with high quality settings
     loop = asyncio.get_event_loop()
+    
+    # Create a dictionary to store results by page number
+    page_results_dict = {}
+    
     with ProcessPoolExecutor(max_workers=2) as executor:
         ocr_tasks = []
         for page_num in sample_pages:
@@ -618,19 +624,40 @@ async def process_with_smart_sampling(pdf, pdf_data, page_count, temp_dir):
                 page_width, 
                 page_height
             )
-            ocr_tasks.append(ocr_task)
+            ocr_tasks.append((page_num, ocr_task))  # Track page number with each task
         
-        # Process results
-        for future in asyncio.as_completed(ocr_tasks, timeout=90):
+        tasks_with_timeout = []
+        for page_num, future_task in ocr_tasks:
+            tasks_with_timeout.append((page_num, asyncio.wait_for(future_task, timeout=90)))
+        
+        # Process results while maintaining page number
+        for page_num, task_with_timeout in tasks_with_timeout:
             try:
-                page_results = await future
-                results.extend(page_results)
+                page_data = await task_with_timeout
+                page_results_dict[page_num] = page_data
+            except asyncio.TimeoutError:
+                print(f"Timeout processing page {page_num}")
+                page_results_dict[page_num] = [{
+                    "text": f"[Timeout processing page {page_num}]",
+                    "bbox": [0, 0, 100, 100],
+                    "pageNumber": page_num
+                }]
             except Exception as e:
-                print(f"Error in smart sampling OCR: {e}")
+                print(f"Error in smart sampling OCR for page {page_num}: {e}")
+                page_results_dict[page_num] = [{
+                    "text": f"[Error processing page {page_num}]",
+                    "bbox": [0, 0, 100, 100],
+                    "pageNumber": page_num
+                }]
+    
+    # Combine results in page order
+    ordered_results = []
+    for page_num in sorted(page_results_dict.keys()):
+        ordered_results.extend(page_results_dict[page_num])
     
     # Add metadata to indicate sampling was used
     return {
-        "results": results, 
+        "results": ordered_results, 
         "sampling_used": True,
         "pages_processed": len(sample_pages),
         "total_pages": page_count,
