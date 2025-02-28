@@ -1,7 +1,9 @@
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel
 import httpx
 import io
@@ -17,7 +19,12 @@ import numpy as np
 import time
 import cv2
 import uuid
+import json
 from typing import Dict, List, Optional
+import redis.asyncio as redis
+from datetime import timedelta
+import platform
+from load_balancer import load_tracker, monitor_system_resources
 
 app = FastAPI()
 
@@ -32,7 +39,7 @@ app.add_middleware(
 
 # In-memory storage for jobs
 # In a production environment, consider using Redis or another distributed storage
-active_jobs = {}
+# active_jobs = {}
 
 class PDFRequest(BaseModel):
     pdf_url: str
@@ -58,12 +65,82 @@ def is_searchable_pdf(pdf):
             return True
     return False
 
+# Add this to your startup event
+@app.on_event("startup")
+async def startup():
+    # Existing Redis initialization code
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    app.state.redis = await redis.from_url(redis_url)
+    await FastAPILimiter.init(app.state.redis)
+    
+    # Start the resource monitor
+    asyncio.create_task(monitor_system_resources())
+
+# Add health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for load balancers"""
+    load_tracker.update_stats()
+    
+    return {
+        "status": "healthy" if not load_tracker.is_overloaded else "overloaded",
+        "cpu_percent": load_tracker.cpu_percent,
+        "memory_percent": load_tracker.memory_percent,
+        "active_jobs": load_tracker.active_jobs,
+        "hostname": platform.node()
+    }
+
+# Helper functions for Redis job operations
+async def save_job(redis_client, job: JobStatus):
+    """Save job data to Redis"""
+    # Convert JobStatus to dict for JSON serialization
+    job_dict = job.dict()
+    # Store with TTL of 1 hour
+    await redis_client.setex(
+        f"job:{job.job_id}", 
+        timedelta(hours=1),
+        json.dumps(job_dict)
+    )
+
+async def get_job(redis_client, job_id: str):
+    """Get job data from Redis"""
+    job_data = await redis_client.get(f"job:{job_id}")
+    if not job_data:
+        return None
+    # Convert back to JobStatus model
+    return JobStatus(**json.loads(job_data))
+
+async def update_job(redis_client, job_id: str, updates: dict):
+    """Update specific fields in a job"""
+    job = await get_job(redis_client, job_id)
+    if not job:
+        return None
+    
+    # Update job with new values
+    for key, value in updates.items():
+        setattr(job, key, value)
+    
+    # Save back to Redis
+    await save_job(redis_client, job)
+    return job
+
 @app.post("/extract")
-async def extract_pdf(pdf_req: PDFRequest, background_tasks: BackgroundTasks):
-    # Start timing
-    start_time = time.time()
+async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: BackgroundTasks, dependencies=[Depends(RateLimiter(times=1, seconds=1))]):
+    # Check if system can handle another job
+    if not load_tracker.can_accept_job():
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily overloaded. Please try again later.",
+            headers={"Retry-After": "30"}
+        )
+    
+    # Update active job count
+    load_tracker.increment_jobs()
     
     try:
+        # Start timing
+        start_time = time.time()
+    
         # Download with timeout and size limit check
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(pdf_req.pdf_url)
@@ -123,7 +200,7 @@ async def extract_pdf(pdf_req: PDFRequest, background_tasks: BackgroundTasks):
             job_id = str(uuid.uuid4())
             
             # Create a new job
-            active_jobs[job_id] = JobStatus(
+            job = JobStatus(
                 job_id=job_id,
                 status="processing",
                 total_pages=page_count,
@@ -131,14 +208,16 @@ async def extract_pdf(pdf_req: PDFRequest, background_tasks: BackgroundTasks):
                 ocr_used=True,
                 results=[]
             )
+            await save_job(app.state.redis, job)
             
             # Process first batch of pages synchronously (for immediate results)
             first_batch_size = 40  # Process first 40 pages right away
             first_batch_results = await process_ocr_batch(pdf, pdf_data, 0, first_batch_size)
             
             # Update job with first batch results
-            active_jobs[job_id].results.extend(first_batch_results["results"])
-            active_jobs[job_id].pages_processed = first_batch_size
+            job.results.extend(first_batch_results["results"])
+            job.pages_processed = first_batch_size
+            await save_job(app.state.redis, job)
             
             # Schedule background processing for remaining pages
             background_tasks.add_task(
@@ -159,7 +238,7 @@ async def extract_pdf(pdf_req: PDFRequest, background_tasks: BackgroundTasks):
                 "total_pages": page_count,
                 "pages_processed": first_batch_size,
                 "ocr_used": True,
-                "results": active_jobs[job_id].results,
+                "results": job.results,
                 "processing_time": f"{processing_time:.2f} seconds",
                 "message": f"First {first_batch_size} pages processed. Poll /status/{job_id} for remaining pages."
             }
@@ -171,25 +250,17 @@ async def extract_pdf(pdf_req: PDFRequest, background_tasks: BackgroundTasks):
             detail=f"Processing timed out after {elapsed:.1f} seconds. For large documents, try processing fewer pages."
         )
     except Exception as e:
-        elapsed = time.time() - start_time
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error after {elapsed:.1f} seconds: {str(e)}"
-        )
+        # Make sure to decrement the counter on error
+        load_tracker.decrement_jobs()
+        # Re-raise the exception
+        raise
 
 @app.get("/status/{job_id}")
 async def get_job_status(job_id: str):
     """Get the status of a background processing job"""
-    if job_id not in active_jobs:
+    job = await get_job(app.state.redis, job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = active_jobs[job_id]
-    
-    # If job is completed and has been polled, we could clean it up
-    # But keep for a while in case client needs to fetch results again
-    if job.status == "completed" or job.status == "failed":
-        # Consider removing job from active_jobs after a timeout
-        pass
     
     return job
 
@@ -199,6 +270,11 @@ async def process_remaining_pages_background(job_id: str, pdf_data: io.BytesIO, 
         pdf = pdfium.PdfDocument(pdf_data)
         page_count = len(pdf)
         
+        # Get job from Redis
+        job = await get_job(app.state.redis, job_id)
+        if not job:
+            return
+        
         # Process remaining pages in batches
         for batch_start in range(start_page, page_count, batch_size):
             batch_end = min(batch_start + batch_size, page_count)
@@ -206,20 +282,27 @@ async def process_remaining_pages_background(job_id: str, pdf_data: io.BytesIO, 
             # Process this batch
             batch_result = await process_ocr_batch(pdf, pdf_data, batch_start, batch_end)
             
-            # Update job with batch results
-            if job_id in active_jobs:
-                active_jobs[job_id].results.extend(batch_result["results"])
-                active_jobs[job_id].pages_processed = batch_end
+            ## Update job with batch results
+            job = await get_job(app.state.redis, job_id)
+            if job:
+                job.results.extend(batch_result["results"])
+                job.pages_processed = batch_end
+                await save_job(app.state.redis, job)
         
         # Mark job as completed
-        if job_id in active_jobs:
-            active_jobs[job_id].status = "completed"
-            
+        await update_job(app.state.redis, job_id, {
+            "status": "completed"
+        })
+        
     except Exception as e:
         # Handle any errors
-        if job_id in active_jobs:
-            active_jobs[job_id].status = "failed"
-            active_jobs[job_id].error = str(e)
+        await update_job(app.state.redis, job_id, {
+            "status": "failed",
+            "error": str(e)
+        })
+    finally:
+        # Always decrement job counter when background task is done
+        load_tracker.decrement_jobs()
 
 async def process_ocr_batch(pdf, pdf_data, start_page, end_page):
     """Process a specific batch of pages with OCR"""
@@ -647,34 +730,3 @@ def is_mostly_blank(image, threshold=0.95):
     total_pixels = image.shape[0] * image.shape[1]
     
     return white_pixels / total_pixels > threshold
-
-# Add job cleanup mechanism (optional)
-@app.on_event("startup")
-async def setup_background_cleanup():
-    """Setup background job to clean up old jobs"""
-    asyncio.create_task(cleanup_old_jobs())
-
-async def cleanup_old_jobs():
-    """Periodically clean up old completed jobs"""
-    while True:
-        # Wait for a while
-        await asyncio.sleep(300)  # 5 minutes
-        
-        # Find jobs to remove (completed/failed jobs older than 30 minutes)
-        jobs_to_remove = []
-        current_time = time.time()
-        
-        for job_id, job in active_jobs.items():
-            if job.status in ["completed", "failed"]:
-                # We could add a timestamp to job creation if we want to track age
-                # For now, just limit total number of completed jobs
-                jobs_to_remove.append(job_id)
-        
-        # Limit to oldest 50 completed jobs if we have more than 100
-        if len(jobs_to_remove) > 100:
-            jobs_to_remove = jobs_to_remove[:50]
-            
-        # Remove jobs
-        for job_id in jobs_to_remove:
-            if job_id in active_jobs:
-                del active_jobs[job_id]

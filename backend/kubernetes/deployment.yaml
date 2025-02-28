@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pdf-service
+  labels:
+    app: pdf-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pdf-service
+  template:
+    metadata:
+      labels:
+        app: pdf-service
+    spec:
+      containers:
+        - name: pdf-service
+          image: backend-pdf-service:latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+          ports:
+            - containerPort: 8000
+          env:
+            - name: WORKERS
+              value: "1"
+            - name: TESSERACT_NUM_THREADS
+              value: "2"
+            - name: MAX_WORKERS
+              value: "2"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MALLOC_ARENA_MAX
+              value: "2"
+            - name: PYTHONMALLOC
+              value: "malloc"
+            - name: REDIS_URL
+              value: "redis://redis-service:6379/0"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 2
