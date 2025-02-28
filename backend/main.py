@@ -1,6 +1,6 @@
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
@@ -16,6 +16,8 @@ from functools import partial
 import numpy as np
 import time
 import cv2
+import uuid
+from typing import Dict, List, Optional
 
 app = FastAPI()
 
@@ -28,8 +30,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# In-memory storage for jobs
+# In a production environment, consider using Redis or another distributed storage
+active_jobs = {}
+
 class PDFRequest(BaseModel):
     pdf_url: str
+
+class JobStatus(BaseModel):
+    job_id: str
+    status: str  # "processing", "completed", "failed"
+    total_pages: int
+    pages_processed: int
+    ocr_used: bool
+    results: List[dict] = []
+    error: Optional[str] = None
 
 # Add this function to detect if PDF needs OCR
 def is_searchable_pdf(pdf):
@@ -44,7 +59,7 @@ def is_searchable_pdf(pdf):
     return False
 
 @app.post("/extract")
-async def extract_pdf(pdf_req: PDFRequest):
+async def extract_pdf(pdf_req: PDFRequest, background_tasks: BackgroundTasks):
     # Start timing
     start_time = time.time()
     
@@ -76,25 +91,79 @@ async def extract_pdf(pdf_req: PDFRequest):
         # Determine if PDF is searchable or needs OCR
         needs_ocr = not is_searchable_pdf(pdf)
         
-        # Choose processing strategy
-        if needs_ocr:
-            # Use improved OCR processing
-            results = await process_with_optimized_ocr(pdf, pdf_data)
-        else:
-            # For text PDFs, use optimized text extraction
+        # Choose processing strategy based on OCR need and page count
+        if not needs_ocr:
+            # For text PDFs, use optimized text extraction (sync)
             results = await extract_text(pdf, pdf_data)
-        
-        # Calculate processing time
-        processing_time = time.time() - start_time
-        print(f"Processed {page_count} pages in {processing_time:.2f} seconds")
-        
-        # Add processing metadata
-        results["processing_time"] = f"{processing_time:.2f} seconds"
-        results["pages_processed"] = page_count
-        results["ocr_used"] = needs_ocr
-        
-        return results
-        
+            
+            # Calculate processing time
+            processing_time = time.time() - start_time
+            
+            # Add processing metadata
+            results["processing_time"] = f"{processing_time:.2f} seconds"
+            results["pages_processed"] = page_count
+            results["ocr_used"] = needs_ocr
+            
+            return results
+        elif needs_ocr and page_count <= 40:
+            # For small OCR PDFs, process synchronously
+            results = await process_with_optimized_ocr(pdf, pdf_data)
+            
+            # Calculate processing time
+            processing_time = time.time() - start_time
+            
+            # Add processing metadata
+            results["processing_time"] = f"{processing_time:.2f} seconds"
+            results["pages_processed"] = page_count
+            results["ocr_used"] = needs_ocr
+            
+            return results
+        else:
+            # For large OCR PDFs, process first batch and return job ID
+            job_id = str(uuid.uuid4())
+            
+            # Create a new job
+            active_jobs[job_id] = JobStatus(
+                job_id=job_id,
+                status="processing",
+                total_pages=page_count,
+                pages_processed=0,
+                ocr_used=True,
+                results=[]
+            )
+            
+            # Process first batch of pages synchronously (for immediate results)
+            first_batch_size = 40  # Process first 40 pages right away
+            first_batch_results = await process_ocr_batch(pdf, pdf_data, 0, first_batch_size)
+            
+            # Update job with first batch results
+            active_jobs[job_id].results.extend(first_batch_results["results"])
+            active_jobs[job_id].pages_processed = first_batch_size
+            
+            # Schedule background processing for remaining pages
+            background_tasks.add_task(
+                process_remaining_pages_background,
+                job_id=job_id,
+                pdf_data=pdf_data,
+                start_page=first_batch_size,
+                batch_size=20
+            )
+            
+            # Calculate initial processing time
+            processing_time = time.time() - start_time
+            
+            # Return first batch with job ID for polling
+            return {
+                "job_id": job_id,
+                "status": "processing",
+                "total_pages": page_count,
+                "pages_processed": first_batch_size,
+                "ocr_used": True,
+                "results": active_jobs[job_id].results,
+                "processing_time": f"{processing_time:.2f} seconds",
+                "message": f"First {first_batch_size} pages processed. Poll /status/{job_id} for remaining pages."
+            }
+            
     except asyncio.TimeoutError:
         elapsed = time.time() - start_time
         raise HTTPException(
@@ -108,6 +177,108 @@ async def extract_pdf(pdf_req: PDFRequest):
             detail=f"Error after {elapsed:.1f} seconds: {str(e)}"
         )
 
+@app.get("/status/{job_id}")
+async def get_job_status(job_id: str):
+    """Get the status of a background processing job"""
+    if job_id not in active_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = active_jobs[job_id]
+    
+    # If job is completed and has been polled, we could clean it up
+    # But keep for a while in case client needs to fetch results again
+    if job.status == "completed" or job.status == "failed":
+        # Consider removing job from active_jobs after a timeout
+        pass
+    
+    return job
+
+async def process_remaining_pages_background(job_id: str, pdf_data: io.BytesIO, start_page: int, batch_size: int):
+    """Process remaining pages in batches"""
+    try:
+        pdf = pdfium.PdfDocument(pdf_data)
+        page_count = len(pdf)
+        
+        # Process remaining pages in batches
+        for batch_start in range(start_page, page_count, batch_size):
+            batch_end = min(batch_start + batch_size, page_count)
+            
+            # Process this batch
+            batch_result = await process_ocr_batch(pdf, pdf_data, batch_start, batch_end)
+            
+            # Update job with batch results
+            if job_id in active_jobs:
+                active_jobs[job_id].results.extend(batch_result["results"])
+                active_jobs[job_id].pages_processed = batch_end
+        
+        # Mark job as completed
+        if job_id in active_jobs:
+            active_jobs[job_id].status = "completed"
+            
+    except Exception as e:
+        # Handle any errors
+        if job_id in active_jobs:
+            active_jobs[job_id].status = "failed"
+            active_jobs[job_id].error = str(e)
+
+async def process_ocr_batch(pdf, pdf_data, start_page, end_page):
+    """Process a specific batch of pages with OCR"""
+    # Create a new PDF document with just these pages for processing
+    # (We're processing the original document, just limiting page range)
+    batch_results = []
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Process specified pages
+        render_tasks = []
+        for page_num in range(start_page, end_page):
+            render_tasks.append(render_optimized_page(pdf, page_num, temp_dir))
+        
+        await asyncio.gather(*render_tasks)
+        
+        # Process OCR for pages
+        loop = asyncio.get_event_loop()
+        worker_count = min(multiprocessing.cpu_count(), 2)  # Respect 2vCPU limit
+        
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            ocr_tasks = []
+            for page_num in range(start_page, end_page):
+                img_path = os.path.join(temp_dir, f"page_{page_num}.png")
+                if not os.path.exists(img_path):
+                    continue
+                
+                page = pdf.get_page(page_num)
+                page_width, page_height = page.get_size()
+                
+                ocr_task = loop.run_in_executor(
+                    executor, 
+                    process_page_with_optimized_ocr,
+                    img_path, 
+                    page_num, 
+                    page_width, 
+                    page_height
+                )
+                ocr_tasks.append((page_num, ocr_task))
+            
+            # Process with reasonable timeouts
+            for page_num, future_task in ocr_tasks:
+                try:
+                    page_results = await asyncio.wait_for(future_task, timeout=30)
+                    batch_results.extend(page_results)
+                except asyncio.TimeoutError:
+                    batch_results.append({
+                        "text": f"[Timeout processing page {page_num}]",
+                        "bbox": [0, 0, 100, 100],
+                        "pageNumber": page_num
+                    })
+                except Exception as e:
+                    batch_results.append({
+                        "text": f"[Error processing page {page_num}]",
+                        "bbox": [0, 0, 100, 100],
+                        "pageNumber": page_num
+                    })
+    
+    return {"results": batch_results}
+
 async def extract_text(pdf, pdf_data):
     results = []
     sentence_enders = {".", "!", "?"}
@@ -117,14 +288,14 @@ async def extract_text(pdf, pdf_data):
     for page_num in range(len(pdf)):
         tasks.append(extract_page_text(pdf, page_num, sentence_enders, email_domains))
     
-        # Process all pages
-        page_results = await limit_concurrent_tasks(tasks, 3)
-        
-        # Flatten results
-        for page_data in page_results:
-            results.extend(page_data)
-        
-        return {"results": results}
+    # Process all pages
+    page_results = await limit_concurrent_tasks(tasks, 3)
+    
+    # Flatten results
+    for page_data in page_results:
+        results.extend(page_data)
+    
+    return {"results": results}
     
 async def limit_concurrent_tasks(tasks, limit=3):
     """Run tasks with a concurrency limit to prevent memory issues"""
@@ -230,7 +401,6 @@ async def process_with_optimized_ocr(pdf, pdf_data):
     page_count = len(pdf)
     
     # Determine optimal batch size to keep memory usage low
-    # batch_size = 8  # Process 10 pages at a time
     batch_size = max(5, min(20, int(75 / (page_count / 20))))
     
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -391,7 +561,6 @@ def process_page_with_optimized_ocr(img_path, page_num, page_width, page_height)
         custom_config = r'--oem 1 --psm 6 -l eng --dpi 300'
 
         # Get both normal OCR text and structured data
-        # text = pytesseract.image_to_string(pil_image, config=custom_config)
         ocr_data = pytesseract.image_to_data(
             pil_image, 
             output_type=pytesseract.Output.DICT, 
@@ -478,3 +647,34 @@ def is_mostly_blank(image, threshold=0.95):
     total_pixels = image.shape[0] * image.shape[1]
     
     return white_pixels / total_pixels > threshold
+
+# Add job cleanup mechanism (optional)
+@app.on_event("startup")
+async def setup_background_cleanup():
+    """Setup background job to clean up old jobs"""
+    asyncio.create_task(cleanup_old_jobs())
+
+async def cleanup_old_jobs():
+    """Periodically clean up old completed jobs"""
+    while True:
+        # Wait for a while
+        await asyncio.sleep(300)  # 5 minutes
+        
+        # Find jobs to remove (completed/failed jobs older than 30 minutes)
+        jobs_to_remove = []
+        current_time = time.time()
+        
+        for job_id, job in active_jobs.items():
+            if job.status in ["completed", "failed"]:
+                # We could add a timestamp to job creation if we want to track age
+                # For now, just limit total number of completed jobs
+                jobs_to_remove.append(job_id)
+        
+        # Limit to oldest 50 completed jobs if we have more than 100
+        if len(jobs_to_remove) > 100:
+            jobs_to_remove = jobs_to_remove[:50]
+            
+        # Remove jobs
+        for job_id in jobs_to_remove:
+            if job_id in active_jobs:
+                del active_jobs[job_id]

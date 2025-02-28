@@ -24,11 +24,42 @@ export default function Home() {
     setIsMounted(true);
   }, []);
 
+  const handlePollingTranscript = async (jobId: string) => {
+    const pollingInterval = setInterval(async () => {
+      try {
+        const response = await axios.get(`http://localhost:8000/status/${jobId}`);
+
+        // Update progress indicator
+        //updateProgress(jobStatus.pages_processed, jobStatus.total_pages);
+
+        // Display new results
+        setTranscript(response.data.results);
+
+        // If job is complete, stop polling
+        if (response.data.status === "completed" || response.data.status === "failed") {
+          clearInterval(pollingInterval);
+
+          if (response.data.status === "failed") {
+            alert(response.data.error);
+          } else {
+            alert("Processing complete!");
+          }
+        }
+      } catch (error) {
+        clearInterval(pollingInterval);
+        console.error("Polling error:", error);
+      }
+    }, 2000);
+  };
+
   const handleExtract = async () => {
     try {
       setIsLoading(true);
       const response = await axios.post("http://localhost:8000/extract", { pdf_url: pdfUrl });
       setTranscript(response.data.results);
+      if (response.data.job_id && response.data.status === "processing") {
+        handlePollingTranscript(response.data.job_id);
+      }
     } catch (error) {
       console.error("Extraction error:", error);
       alert("Failed to extract PDF");
