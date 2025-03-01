@@ -488,7 +488,7 @@ async def process_with_optimized_ocr(pdf, pdf_data):
     page_count = len(pdf)
     
     # Determine optimal batch size to keep memory usage low
-    batch_size = max(5, min(20, int(75 / (page_count / 20))))
+    batch_size = max(5, min(10, int(75 / (page_count / 20))))
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # Process all pages in batches
