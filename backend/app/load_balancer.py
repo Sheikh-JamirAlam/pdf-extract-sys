@@ -4,10 +4,10 @@ import platform
 from datetime import datetime
 
 # Configuration
-MAX_CONCURRENT_JOBS = 3
-MAX_CPU_PERCENT = 85
+MAX_CONCURRENT_JOBS = 2
+MAX_CPU_PERCENT = 75
 MAX_MEMORY_PERCENT = 85
-SYSTEM_STATS_INTERVAL = 5  # seconds
+SYSTEM_STATS_INTERVAL = 30  # seconds
 
 class SystemLoadTracker:
     def __init__(self):

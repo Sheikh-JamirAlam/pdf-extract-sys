@@ -146,10 +146,12 @@ async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: B
             response = await client.get(pdf_req.pdf_url)
             
         if response.status_code != 200:
+            load_tracker.decrement_jobs()
             raise HTTPException(status_code=400, detail="Failed to download PDF")
         
         # Check size limit (50MB)
         if len(response.content) > 52_428_800:
+            load_tracker.decrement_jobs()
             raise HTTPException(status_code=400, detail="PDF exceeds maximum size limit of 50MB")
         
         pdf_data = io.BytesIO(response.content)
@@ -158,11 +160,13 @@ async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: B
         try:
             pdf = pdfium.PdfDocument(pdf_data)
         except Exception as e:
+            load_tracker.decrement_jobs()
             raise HTTPException(status_code=400, detail=f"Invalid PDF: {str(e)}")
         
         # Check page count
         page_count = len(pdf)
         if page_count > 2000:
+            load_tracker.decrement_jobs()
             raise HTTPException(status_code=400, detail="PDF exceeds maximum page count of 2000")
         
         # Determine if PDF is searchable or needs OCR
@@ -229,7 +233,7 @@ async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: B
                 job_id=job_id,
                 pdf_data=pdf_data,
                 start_page=first_batch_size,
-                batch_size=20
+                batch_size=10
             )
             
             # Calculate initial processing time
@@ -249,6 +253,7 @@ async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: B
             
     except asyncio.TimeoutError:
         elapsed = time.time() - start_time
+        load_tracker.decrement_jobs()
         raise HTTPException(
             status_code=408, 
             detail=f"Processing timed out after {elapsed:.1f} seconds. For large documents, try processing fewer pages."
@@ -352,12 +357,14 @@ async def process_ocr_batch(pdf, pdf_data, start_page, end_page):
                     page_results = await asyncio.wait_for(future_task, timeout=30)
                     batch_results.extend(page_results)
                 except asyncio.TimeoutError:
+                    load_tracker.decrement_jobs()
                     batch_results.append({
                         "text": f"[Timeout processing page {page_num}]",
                         "bbox": [0, 0, 100, 100],
                         "pageNumber": page_num
                     })
                 except Exception as e:
+                    load_tracker.decrement_jobs()
                     batch_results.append({
                         "text": f"[Error processing page {page_num}]",
                         "bbox": [0, 0, 100, 100],
@@ -544,12 +551,14 @@ async def process_with_optimized_ocr(pdf, pdf_data):
                         page_results = await asyncio.wait_for(future_task, timeout=30)
                         results.extend(page_results)
                     except asyncio.TimeoutError:
+                        load_tracker.decrement_jobs()
                         results.append({
                             "text": f"[Timeout processing page {page_num}]",
                             "bbox": [0, 0, 100, 100],
                             "pageNumber": page_num
                         })
                     except Exception as e:
+                        load_tracker.decrement_jobs()
                         results.append({
                             "text": f"[Error processing page {page_num}]",
                             "bbox": [0, 0, 100, 100],
@@ -563,7 +572,7 @@ async def render_optimized_page(pdf, page_num, temp_dir):
     page = pdf.get_page(page_num)
     
     # Higher scale for better OCR results
-    scale = 2.0  # Higher DPI equivalent
+    scale = 1.5  # Higher DPI equivalent
     
     # Run rendering in thread pool to avoid blocking
     loop = asyncio.get_event_loop()
@@ -717,6 +726,7 @@ def process_page_with_optimized_ocr(img_path, page_num, page_width, page_height)
         return lines
         
     except Exception as e:
+        load_tracker.decrement_jobs()
         print(f"Error in optimized OCR: {e}")
         return [{
             "text": f"[Error processing page {page_num}]",
