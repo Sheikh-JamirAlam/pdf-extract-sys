@@ -27,7 +27,7 @@ export default function Home() {
   const handlePollingTranscript = async (jobId: string) => {
     const pollingInterval = setInterval(async () => {
       try {
-        const response = await axios.get(`http://localhost:8000/status/${jobId}`);
+        const response = await axios.get(`${process.env.BACKEND_URL}/status/${jobId}`);
 
         // Update progress indicator
         //updateProgress(jobStatus.pages_processed, jobStatus.total_pages);
@@ -55,7 +55,7 @@ export default function Home() {
   const handleExtract = async () => {
     try {
       setIsLoading(true);
-      const response = await axios.post("http://localhost:8000/extract", { pdf_url: pdfUrl });
+      const response = await axios.post(`${process.env.BACKEND_URL}/extract`, { pdf_url: pdfUrl });
       setTranscript(response.data.results);
       if (response.data.job_id && response.data.status === "processing") {
         handlePollingTranscript(response.data.job_id);
