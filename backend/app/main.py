@@ -181,6 +181,8 @@ async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: B
             results["pages_processed"] = page_count
             results["ocr_used"] = needs_ocr
             
+            load_tracker.decrement_jobs()
+            
             return results
         elif needs_ocr and page_count <= 40:
             # For small OCR PDFs, process synchronously
@@ -193,6 +195,8 @@ async def extract_pdf(request: Request, pdf_req: PDFRequest, background_tasks: B
             results["processing_time"] = f"{processing_time:.2f} seconds"
             results["pages_processed"] = page_count
             results["ocr_used"] = needs_ocr
+            
+            load_tracker.decrement_jobs()
             
             return results
         else:
